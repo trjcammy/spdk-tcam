@@ -167,6 +167,17 @@ uring_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	return 0;
 }
 
+static void
+uring_opts_get_impl_opts(const struct spdk_sock_opts *opts, struct spdk_sock_impl_opts *dest)
+{
+	/* Copy the default impl_opts first to cover cases when user's impl_opts is smaller */
+	memcpy(dest, &g_spdk_uring_sock_impl_opts, sizeof(*dest));
+
+	if (opts->impl_opts != NULL) {
+		uring_sock_copy_impl_opts(dest, opts->impl_opts, opts->impl_opts_size);
+	}
+}
+
 static int
 uring_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *sport,
 		   char *caddr, int clen, uint16_t *cport)
@@ -318,7 +329,7 @@ uring_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 
 	assert(sock != NULL);
 
-	if (g_spdk_uring_sock_impl_opts.enable_recv_pipe) {
+	if (_sock->impl_opts.enable_recv_pipe) {
 		rc = uring_sock_alloc_pipe(sock, sz);
 		if (rc) {
 			SPDK_ERRLOG("unable to allocate sufficient recvbuf with sz=%d on sock=%p\n", sz, _sock);
@@ -334,6 +345,8 @@ uring_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 	if (rc < 0) {
 		return rc;
 	}
+
+	_sock->impl_opts.recv_buf_size = sz;
 
 	return 0;
 }
@@ -355,11 +368,13 @@ uring_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 		return rc;
 	}
 
+	_sock->impl_opts.send_buf_size = sz;
+
 	return 0;
 }
 
 static struct spdk_uring_sock *
-uring_sock_alloc(int fd, bool enable_zero_copy)
+uring_sock_alloc(int fd, struct spdk_sock_impl_opts *impl_opts, bool enable_zero_copy)
 {
 	struct spdk_uring_sock *sock;
 #if defined(__linux__)
@@ -374,18 +389,19 @@ uring_sock_alloc(int fd, bool enable_zero_copy)
 	}
 
 	sock->fd = fd;
+	memcpy(&sock->base.impl_opts, impl_opts, sizeof(*impl_opts));
 
 #if defined(__linux__)
 	flag = 1;
 
-	if (g_spdk_uring_sock_impl_opts.enable_quickack) {
+	if (sock->base.impl_opts.enable_quickack) {
 		rc = setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
 	}
 
-	spdk_sock_get_placement_id(sock->fd, g_spdk_uring_sock_impl_opts.enable_placement_id,
+	spdk_sock_get_placement_id(sock->fd, sock->base.impl_opts.enable_placement_id,
 				   &sock->placement_id);
 #ifdef SPDK_ZEROCOPY
 	/* Try to turn on zero copy sends */
@@ -410,6 +426,7 @@ uring_sock_create(const char *ip, int port,
 		  struct spdk_sock_opts *opts)
 {
 	struct spdk_uring_sock *sock;
+	struct spdk_sock_impl_opts impl_opts;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
 	char *p;
@@ -421,6 +438,7 @@ uring_sock_create(const char *ip, int port,
 	bool enable_zcopy_user_opts = true;
 
 	assert(opts != NULL);
+	uring_opts_get_impl_opts(opts, &impl_opts);
 
 	if (ip == NULL) {
 		return NULL;
@@ -457,13 +475,13 @@ retry:
 			continue;
 		}
 
-		val = g_spdk_uring_sock_impl_opts.recv_buf_size;
+		val = impl_opts.recv_buf_size;
 		rc = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &val, sizeof val);
 		if (rc) {
 			/* Not fatal */
 		}
 
-		val = g_spdk_uring_sock_impl_opts.send_buf_size;
+		val = impl_opts.send_buf_size;
 		rc = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &val, sizeof val);
 		if (rc) {
 			/* Not fatal */
@@ -561,7 +579,7 @@ retry:
 				break;
 			}
 
-			enable_zcopy_impl_opts = g_spdk_uring_sock_impl_opts.enable_zerocopy_send_server;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_server;
 		} else if (type == SPDK_SOCK_CREATE_CONNECT) {
 			rc = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
@@ -580,7 +598,7 @@ retry:
 				break;
 			}
 
-			enable_zcopy_impl_opts = g_spdk_uring_sock_impl_opts.enable_zerocopy_send_client;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_client;
 		}
 		break;
 	}
@@ -591,7 +609,7 @@ retry:
 	}
 
 	enable_zcopy_user_opts = opts->zcopy && !sock_is_loopback(fd);
-	sock = uring_sock_alloc(fd, enable_zcopy_user_opts && enable_zcopy_impl_opts);
+	sock = uring_sock_alloc(fd, &impl_opts, enable_zcopy_user_opts && enable_zcopy_impl_opts);
 	if (sock == NULL) {
 		SPDK_ERRLOG("sock allocation failed\n");
 		close(fd);
@@ -654,7 +672,7 @@ uring_sock_accept(struct spdk_sock *_sock)
 	}
 #endif
 
-	new_sock = uring_sock_alloc(fd, sock->zcopy);
+	new_sock = uring_sock_alloc(fd, &sock->base.impl_opts, sock->zcopy);
 	if (new_sock == NULL) {
 		close(fd);
 		return NULL;

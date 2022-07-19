@@ -3455,7 +3455,13 @@ Example response:
             "cntlid": 0,
             "current": true,
             "connected": true,
-            "accessible": true
+            "accessible": true,
+            "transport": {
+              "trtype": "RDMA",
+              "traddr": "1.2.3.4",
+              "trsvcid": "4420",
+              "adrfam": "IPv4"
+            }
           }
         ]
       }
@@ -4919,6 +4925,85 @@ Example request:
   },
   "jsonrpc": "2.0",
   "method": "bdev_passthru_delete",
+  "id": 1
+}
+
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_xnvme_create {#rpc_bdev_xnvme_create}
+
+Create xnvme bdev. This bdev type redirects all IO to its underlying backend.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | name of xNVMe bdev to create
+filename                | Required | string      | path to device or file (ex: /dev/nvme0n1)
+io_mechanism            | Required | string      | IO mechanism to use (ex: libaio, io_uring, io_uring_cmd, etc.)
+
+#### Result
+
+Name of newly created bdev.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_xnvme_create",
+  "id": 1,
+  "params": {
+    "name": "bdev_ng0n1",
+    "filename": "/dev/ng0n1",
+    "io_mechanism": "io_uring_cmd"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "bdev_ng0n1"
+}
+~~~
+
+### bdev_xnvme_delete {#rpc_bdev_xnvme_delete}
+
+Delete xnvme bdev.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | name of xnvme bdev to delete
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "bdev_ng0n1"
+  },
+  "jsonrpc": "2.0",
+  "method": "bdev_xnvme_delete",
   "id": 1
 }
 

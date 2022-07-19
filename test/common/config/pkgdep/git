@@ -50,11 +50,6 @@ function install_refspdk() {
 
 	release=${release#v}
 
-	if ((gcc_version >= 11)) && le "$release" 21.04; then
-		cherry_picks+=("36b5a69bb0699694b53a2f08a13cc0de620450a9")
-		cherry_picks+=("2ac152158116a17b863270a4731977d9ddedf50d")
-	fi
-
 	if [[ $OSID == "freebsd" ]]; then
 		# Fetch all the branches
 		git -C "$output_dir" fetch origin '+refs/heads/v*:refs/remotes/origin/v*'
@@ -245,16 +240,10 @@ function _install_qemu() {
 
 	opt_params+=("--disable-docs")
 	if ((gcc_version >= 9)); then
-		# GCC 9 fails to compile Qemu due to some old warnings which were not detected by older versions.
-		extra_cflags+=("-Wno-error=stringop-truncation" "-Wno-error=deprecated-declarations")
-		extra_cflags+=("-Wno-error=incompatible-pointer-types" "-Wno-error=format-truncation")
-		extra_cflags+=("-Wno-error=address-of-packed-member")
 		opt_params+=("--disable-glusterfs")
 	fi
 
-	if ((gcc_version >= 11)); then
-		extra_cflags+=("-Wno-error=array-bounds")
-	fi
+	extra_cflags+=("-Wno-error")
 
 	# Most tsocks proxies rely on a configuration file in /etc/tsocks.conf.
 	# If using tsocks, please make sure to complete this config before trying to build qemu.
@@ -297,7 +286,10 @@ function install_nvmecli() {
 		git clone "https://github.com/linux-nvme/nvme-cli.git" "$GIT_REPOS/nvme-cli-cuse"
 	fi
 	git -C "$GIT_REPOS/nvme-cli-cuse" checkout v1.16
-	make -C "$GIT_REPOS/nvme-cli-cuse" CPPFLAGS="-Wno-error=maybe-uninitialized"
+
+	cflags=("-Wno-error")
+
+	make -C "$GIT_REPOS/nvme-cli-cuse" CFLAGS="${cflags[*]}"
 	if [ -d "/usr/local/src/nvme-cli" ]; then
 		sudo rm -rf /usr/local/src/nvme-cli
 	fi
@@ -580,7 +572,7 @@ ICE_VERSION=1.8.8
 BPFTRACE_VERSION=v0.15.0
 
 VFIO_QEMU_BRANCH=${VFIO_QEMU_BRANCH:-vfio-user-dbfix}
-VANILLA_QEMU_BRANCH=${VANILLA_QEMU_BRANCH:-v6.2.0}
+VANILLA_QEMU_BRANCH=${VANILLA_QEMU_BRANCH:-v7.0.0}
 BCC_BRANCH=${BCC_BRANCH:-6dac27d9}
 
 : ${GIT_REPO_SPDK=https://github.com/spdk/spdk.git}

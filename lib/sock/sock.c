@@ -255,6 +255,14 @@ spdk_sock_get_default_opts(struct spdk_sock_opts *opts)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, ktls)) {
 		opts->ktls = SPDK_SOCK_DEFAULT_KTLS;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts)) {
+		opts->impl_opts = NULL;
+	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts_size)) {
+		opts->impl_opts_size = 0;
+	}
 }
 
 /*
@@ -291,6 +299,14 @@ sock_init_opts(struct spdk_sock_opts *opts, struct spdk_sock_opts *opts_user)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, ktls)) {
 		opts->ktls = opts_user->ktls;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts)) {
+		opts->impl_opts = opts_user->impl_opts;
+	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts)) {
+		opts->impl_opts_size = opts_user->impl_opts_size;
+	}
 }
 
 struct spdk_sock *
@@ -310,8 +326,6 @@ spdk_sock_connect_ext(const char *ip, int port, char *_impl_name, struct spdk_so
 	struct spdk_sock *sock;
 	struct spdk_sock_opts opts_local;
 	const char *impl_name = NULL;
-	struct spdk_sock_impl_opts impl_opts = {};
-	size_t len;
 
 	if (opts == NULL) {
 		SPDK_ERRLOG("the opts should not be NULL pointer\n");
@@ -335,13 +349,13 @@ spdk_sock_connect_ext(const char *ip, int port, char *_impl_name, struct spdk_so
 		if (sock != NULL) {
 			/* Copy the contents, both the two structures are the same ABI version */
 			memcpy(&sock->opts, &opts_local, sizeof(sock->opts));
+			/* Clear out impl_opts to make sure we don't keep reference to a dangling
+			 * pointer */
+			sock->opts.impl_opts = NULL;
 			sock->net_impl = impl;
 			TAILQ_INIT(&sock->queued_reqs);
 			TAILQ_INIT(&sock->pending_reqs);
 
-			len = sizeof(struct spdk_sock_impl_opts);
-			spdk_sock_impl_get_opts(impl->name, &impl_opts, &len);
-			sock->zerocopy_threshold = impl_opts.zerocopy_threshold;
 			return sock;
 		}
 	}
@@ -389,6 +403,9 @@ spdk_sock_listen_ext(const char *ip, int port, char *_impl_name, struct spdk_soc
 		if (sock != NULL) {
 			/* Copy the contents, both the two structures are the same ABI version */
 			memcpy(&sock->opts, &opts_local, sizeof(sock->opts));
+			/* Clear out impl_opts to make sure we don't keep reference to a dangling
+			 * pointer */
+			sock->opts.impl_opts = NULL;
 			sock->net_impl = impl;
 			/* Don't need to initialize the request queues for listen
 			 * sockets. */
@@ -403,8 +420,6 @@ struct spdk_sock *
 spdk_sock_accept(struct spdk_sock *sock)
 {
 	struct spdk_sock *new_sock;
-	struct spdk_sock_impl_opts impl_opts = {};
-	size_t len;
 
 	new_sock = sock->net_impl->accept(sock);
 	if (new_sock != NULL) {
@@ -414,10 +429,6 @@ spdk_sock_accept(struct spdk_sock *sock)
 		new_sock->net_impl = sock->net_impl;
 		TAILQ_INIT(&new_sock->queued_reqs);
 		TAILQ_INIT(&new_sock->pending_reqs);
-
-		len = sizeof(struct spdk_sock_impl_opts);
-		spdk_sock_impl_get_opts(sock->net_impl->name, &impl_opts, &len);
-		new_sock->zerocopy_threshold = impl_opts.zerocopy_threshold;
 	}
 
 	return new_sock;

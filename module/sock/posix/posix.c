@@ -147,6 +147,17 @@ posix_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	return 0;
 }
 
+static void
+posix_opts_get_impl_opts(const struct spdk_sock_opts *opts, struct spdk_sock_impl_opts *dest)
+{
+	/* Copy the default impl_opts first to cover cases when user's impl_opts is smaller */
+	memcpy(dest, &g_spdk_posix_sock_impl_opts, sizeof(*dest));
+
+	if (opts->impl_opts != NULL) {
+		posix_sock_copy_impl_opts(dest, opts->impl_opts, opts->impl_opts_size);
+	}
+}
+
 static int
 posix_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *sport,
 		   char *caddr, int clen, uint16_t *cport)
@@ -298,7 +309,7 @@ posix_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 
 	assert(sock != NULL);
 
-	if (g_spdk_posix_sock_impl_opts.enable_recv_pipe) {
+	if (_sock->impl_opts.enable_recv_pipe) {
 		rc = posix_sock_alloc_pipe(sock, sz);
 		if (rc) {
 			return rc;
@@ -314,6 +325,8 @@ posix_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 	if (rc < 0) {
 		return rc;
 	}
+
+	_sock->impl_opts.recv_buf_size = sz;
 
 	return 0;
 }
@@ -334,6 +347,8 @@ posix_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 	if (rc < 0) {
 		return rc;
 	}
+
+	_sock->impl_opts.send_buf_size = sz;
 
 	return 0;
 }
@@ -361,17 +376,17 @@ posix_sock_init(struct spdk_posix_sock *sock, bool enable_zero_copy)
 #if defined(__linux__)
 	flag = 1;
 
-	if (g_spdk_posix_sock_impl_opts.enable_quickack) {
+	if (sock->base.impl_opts.enable_quickack) {
 		rc = setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
 	}
 
-	spdk_sock_get_placement_id(sock->fd, g_spdk_posix_sock_impl_opts.enable_placement_id,
+	spdk_sock_get_placement_id(sock->fd, sock->base.impl_opts.enable_placement_id,
 				   &sock->placement_id);
 
-	if (g_spdk_posix_sock_impl_opts.enable_placement_id == PLACEMENT_MARK) {
+	if (sock->base.impl_opts.enable_placement_id == PLACEMENT_MARK) {
 		/* Save placement_id */
 		spdk_sock_map_insert(&g_map, sock->placement_id, NULL);
 	}
@@ -379,7 +394,7 @@ posix_sock_init(struct spdk_posix_sock *sock, bool enable_zero_copy)
 }
 
 static struct spdk_posix_sock *
-posix_sock_alloc(int fd, bool enable_zero_copy)
+posix_sock_alloc(int fd, struct spdk_sock_impl_opts *impl_opts, bool enable_zero_copy)
 {
 	struct spdk_posix_sock *sock;
 
@@ -390,13 +405,15 @@ posix_sock_alloc(int fd, bool enable_zero_copy)
 	}
 
 	sock->fd = fd;
+	memcpy(&sock->base.impl_opts, impl_opts, sizeof(*impl_opts));
 	posix_sock_init(sock, enable_zero_copy);
 
 	return sock;
 }
 
 static int
-posix_fd_create(struct addrinfo *res, struct spdk_sock_opts *opts)
+posix_fd_create(struct addrinfo *res, struct spdk_sock_opts *opts,
+		struct spdk_sock_impl_opts *impl_opts)
 {
 	int fd;
 	int val = 1;
@@ -411,13 +428,13 @@ posix_fd_create(struct addrinfo *res, struct spdk_sock_opts *opts)
 		return -1;
 	}
 
-	sz = g_spdk_posix_sock_impl_opts.recv_buf_size;
+	sz = impl_opts->recv_buf_size;
 	rc = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc) {
 		/* Not fatal */
 	}
 
-	sz = g_spdk_posix_sock_impl_opts.send_buf_size;
+	sz = impl_opts->send_buf_size;
 	rc = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 	if (rc) {
 		/* Not fatal */
@@ -801,6 +818,7 @@ posix_sock_create(const char *ip, int port,
 		  bool enable_ssl)
 {
 	struct spdk_posix_sock *sock;
+	struct spdk_sock_impl_opts impl_opts;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
 	char *p;
@@ -813,6 +831,7 @@ posix_sock_create(const char *ip, int port,
 	SSL *ssl = 0;
 
 	assert(opts != NULL);
+	posix_opts_get_impl_opts(opts, &impl_opts);
 
 	if (ip == NULL) {
 		return NULL;
@@ -843,7 +862,7 @@ posix_sock_create(const char *ip, int port,
 	fd = -1;
 	for (res = res0; res != NULL; res = res->ai_next) {
 retry:
-		fd = posix_fd_create(res, opts);
+		fd = posix_fd_create(res, opts, &impl_opts);
 		if (fd < 0) {
 			continue;
 		}
@@ -886,7 +905,7 @@ retry:
 				fd = -1;
 				break;
 			}
-			enable_zcopy_impl_opts = g_spdk_posix_sock_impl_opts.enable_zerocopy_send_server;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_server;
 		} else if (type == SPDK_SOCK_CREATE_CONNECT) {
 			rc = connect(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
@@ -896,7 +915,7 @@ retry:
 				fd = -1;
 				continue;
 			}
-			enable_zcopy_impl_opts = g_spdk_posix_sock_impl_opts.enable_zerocopy_send_client;
+			enable_zcopy_impl_opts = impl_opts.enable_zerocopy_send_client;
 			if (enable_ssl) {
 				ctx = posix_sock_create_ssl_context(TLS_client_method(), opts);
 				if (!ctx) {
@@ -934,7 +953,7 @@ retry:
 	/* Only enable zero copy for non-loopback and non-ssl sockets. */
 	enable_zcopy_user_opts = opts->zcopy && !sock_is_loopback(fd) && !enable_ssl;
 
-	sock = posix_sock_alloc(fd, enable_zcopy_user_opts && enable_zcopy_impl_opts);
+	sock = posix_sock_alloc(fd, &impl_opts, enable_zcopy_user_opts && enable_zcopy_impl_opts);
 	if (sock == NULL) {
 		SPDK_ERRLOG("sock allocation failed\n");
 		close(fd);
@@ -1018,7 +1037,7 @@ posix_sock_accept(struct spdk_sock *_sock)
 	}
 
 	/* Inherit the zero copy feature from the listen socket */
-	new_sock = posix_sock_alloc(fd, sock->zcopy);
+	new_sock = posix_sock_alloc(fd, &sock->base.impl_opts, sock->zcopy);
 	if (new_sock == NULL) {
 		close(fd);
 		return NULL;
